@@ -1,0 +1,26 @@
+name: Add "in-progress" Label
+on:
+  project_card:
+    types: [moved]  # Trigger when an issue is moved in a project
+
+jobs:
+  add-in-progress-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if issue was moved to "In Progress"
+        if: github.event.project_card.column_name == 'In Progress'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { content_url } = context.payload.project_card;
+            const issueNumber = content_url.split('/').pop();
+
+            // Add the "in-progress" label
+            await github.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: ['in-progress']
+            });
+
+            console.log(`Added "in-progress" to issue #${issueNumber}`);
