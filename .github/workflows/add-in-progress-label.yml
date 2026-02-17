@@ -7,8 +7,10 @@ jobs:
   add-in-progress-label:
     runs-on: ubuntu-latest
     steps:
-      - name: Check if issue was moved to "In Progress"
-        if: github.event.project_card.column_name == 'In Progress'
+      - name: Check if issue was moved in "Customer Intimacy Board" to "In Progress"
+        if: |
+          github.event.project_card.project.name == 'Customer Intimacy Board' &&
+          github.event.project_card.column_name == 'In Progress'
         uses: actions/github-script@v6
         with:
           script: |
