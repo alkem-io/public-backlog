@@ -11,7 +11,7 @@ jobs:
       - name: Add 'in-progress' label when status is 'In Progress'
         uses: alex-page/github-project-automation-plus@v0.8.1
         with:
-          project: "Your Project Name"  # Replace with your project name
+          project: "Customer Intimacy Board"  # Replace with your project name
           column: "In Progress"         # Replace with the exact column name
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
