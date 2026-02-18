@@ -1,10 +1,10 @@
-name: Add "in-progress" Label
+name: Sync Project Status to Label
 on:
   project_card:
     types: [moved]  # Trigger when an issue is moved in a project
 
 jobs:
-  add-in-progress-label:
+  update-label:
     runs-on: ubuntu-latest
     steps:
       - name: Check if issue was moved in "Customer Intimacy Board" to "In Progress"
