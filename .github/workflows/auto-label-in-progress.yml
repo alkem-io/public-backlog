@@ -13,8 +13,8 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
-            // 1. Get the project item that was edited
-            const { project: { item } } = await github.graphql(`
+            // 1. Get the edited project item
+            const { node: item } = await github.graphql(`
               query($itemId: ID!) {
                 node(id: $itemId) {
                   ... on ProjectV2Item {
@@ -55,18 +55,31 @@ jobs:
               itemId: context.payload.project.node_id
             });
 
-            const itemData = item;
-            const statusField = itemData.fieldValues.nodes.find(
-              field => field.field.name === "Status"
+            // 2. Check if the "Status" field is set to "In Progress"
+            const statusField = item.fieldValues.nodes.find(
+              field => field.field?.name === "Status"
             );
 
-            // 2. Check if the Status is "In Progress"
-            if (statusField && statusField.name === "In Progress") {
-              const issue = itemData.content;
+            if (statusField?.name === "In Progress") {
+              const issue = item.content;
               const hasLabel = issue.labels.nodes.some(label => label.name === "in-progress");
 
-              // 3. Add the label if missing
-              if (!hasLabel) {
+              // 3. Fetch the 'in-progress' label ID dynamically
+              const { repository: { label } } = await github.graphql(`
+                query($owner: String!, $repo: String!) {
+                  repository(owner: $owner, name: $repo) {
+                    label(name: "in-progress") {
+                      id
+                    }
+                  }
+                }
+              `, {
+                owner: issue.repository.owner.login,
+                repo: issue.repository.name
+              });
+
+              // 4. Add the label if missing
+              if (!hasLabel && label) {
                 await github.graphql(`
                   mutation($issueId: ID!, $labelId: ID!) {
                     addLabelsToLabelable(input: {
@@ -78,7 +91,7 @@ jobs:
                   }
                 `, {
                   issueId: issue.id,
-                  labelId: "{{ in-progress }}"  # Replace with your label's node ID
+                  labelId: label.id
                 });
               }
             }
