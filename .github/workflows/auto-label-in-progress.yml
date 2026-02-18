@@ -1,0 +1,31 @@
+name: Auto-add 'in-progress' label when status changes
+
+on:
+  project_card:
+    types: [moved]
+
+jobs:
+  add-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add 'in-progress' label when status is 'In Progress'
+        uses: alex-page/github-project-automation-plus@v0.8.1
+        with:
+          project: "Your Project Name"  # Replace with your project name
+          column: "In Progress"         # Replace with the exact column name
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: issue } = await github.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.project_card.content_url.split('/').pop()
+            });
+
+            if (!issue.labels.some(label => label.name === 'in-progress')) {
+              await github.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['in-progress']
+              });
+            }
