@@ -1,7 +1,7 @@
 name: Add 'in-progress' label
   uses: alex-page/github-project-automation-plus@v0.8.1
   with:
-    project: "Your Project Name"  # Must match exactly (org-level)
+    project: "Customer Intimacy Board"  # Must match exactly (org-level)
     column: "In Progress"
     repo-token: ${{ secrets.GITHUB_TOKEN }}
     script: |
