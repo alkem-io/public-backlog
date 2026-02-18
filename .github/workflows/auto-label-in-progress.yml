@@ -3,6 +3,7 @@ name: Auto-add 'in-progress' label when Status is 'In Progress'
 on:
   project:
     types: [edited]  # Triggers when a project item is edited
+    projects: ["53"]  # e.g., "123"
 
 jobs:
   add-label:
