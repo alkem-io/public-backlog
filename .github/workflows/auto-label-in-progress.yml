@@ -1,21 +1,83 @@
-name: Add 'in-progress' label
-  uses: alex-page/github-project-automation-plus@v0.8.1
-  with:
-    project: "Customer Intimacy Board"  # Must match exactly (org-level)
-    column: "In Progress"
-    repo-token: ${{ secrets.GITHUB_TOKEN }}
-    script: |
-      const { data: issue } = await github.issues.get({
-        owner: context.payload.repository.owner.login,
-        repo: context.payload.project_card.content_url.split('/')[4], // Extract repo name
-        issue_number: context.payload.project_card.content_url.split('/').pop()
-      });
+name: Auto-add 'in-progress' label when Status is 'In Progress'
 
-      if (!issue.labels.some(label => label.name === 'in-progress')) {
-        await github.issues.addLabels({
-          owner: context.payload.repository.owner.login,
-          repo: context.payload.project_card.content_url.split('/')[4],
-          issue_number: issue.number,
-          labels: ['in-progress']
-        });
-      }
+on:
+  project:
+    types: [edited]  # Triggers when a project item is edited
+
+jobs:
+  add-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add 'in-progress' label when Status is 'In Progress'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // 1. Get the project item that was edited
+            const { project: { item } } = await github.graphql(`
+              query($itemId: ID!) {
+                node(id: $itemId) {
+                  ... on ProjectV2Item {
+                    id
+                    fieldValues(first: 20) {
+                      nodes {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          field {
+                            ... on ProjectV2SingleSelectField {
+                              name
+                            }
+                          }
+                          name
+                        }
+                      }
+                    }
+                    content {
+                      ... on Issue {
+                        id
+                        number
+                        repository {
+                          name
+                          owner {
+                            login
+                          }
+                        }
+                        labels(first: 10) {
+                          nodes {
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, {
+              itemId: context.payload.project.node_id
+            });
+
+            const itemData = item;
+            const statusField = itemData.fieldValues.nodes.find(
+              field => field.field.name === "Status"
+            );
+
+            // 2. Check if the Status is "In Progress"
+            if (statusField && statusField.name === "In Progress") {
+              const issue = itemData.content;
+              const hasLabel = issue.labels.nodes.some(label => label.name === "in-progress");
+
+              // 3. Add the label if missing
+              if (!hasLabel) {
+                await github.graphql(`
+                  mutation($issueId: ID!, $labelId: ID!) {
+                    addLabelsToLabelable(input: {
+                      labelableId: $issueId,
+                      labelIds: [$labelId]
+                    }) {
+                      clientMutationId
+                    }
+                  }
+                `, {
+                  issueId: issue.id,
+                  labelId: "{{ in-progress }}"  # Replace with your label's node ID
+                });
+              }
+            }
