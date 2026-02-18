@@ -9,23 +9,62 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Add 'in-progress' label when status is 'In Progress'
-        uses: alex-page/github-project-automation-plus@v0.8.1
+        uses: actions/github-script@v6
         with:
-          project: "Customer Intimacy Board"  # Replace with your project name
-          column: "In Progress"         # Replace with the exact column name
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const { data: issue } = await github.issues.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.project_card.content_url.split('/').pop()
+            // 1. Get the project card details
+            const card = await github.graphql(`
+              query($cardId: ID!) {
+                node(id: $cardId) {
+                  ... on ProjectCard {
+                    column {
+                      name
+                    }
+                    content {
+                      ... on Issue {
+                        id
+                        number
+                        repository {
+                          name
+                          owner {
+                            login
+                          }
+                        }
+                        labels(first: 10) {
+                          nodes {
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, {
+              cardId: context.payload.project_card.node_id
             });
 
-            if (!issue.labels.some(label => label.name === 'in-progress')) {
-              await github.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                labels: ['in-progress']
-              });
+            const cardData = card.node;
+            const columnName = cardData.column.name;
+            const issue = cardData.content;
+
+            // 2. Check if the card is in "In Progress" and the issue exists
+            if (columnName === "In Progress" && issue) {
+              const hasLabel = issue.labels.nodes.some(label => label.name === "in-progress");
+
+              // 3. Add the label if missing
+              if (!hasLabel) {
+                await github.graphql(`
+                  mutation($issueId: ID!) {
+                    addLabelsToLabelable(input: {
+                      labelableId: $issueId,
+                      labelIds: ["in-progress"]  # Replace with your label's node ID
+                    }) {
+                      clientMutationId
+                    }
+                  }
+                `, {
+                  issueId: issue.id
+                });
+              }
             }
