@@ -1,0 +1,124 @@
+name: "Issue labels → Project Status"
+
+on:
+  issues:
+    types: [labeled, unlabeled]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Update Project Status from status:* label
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          ORG: alkem-io
+          PROJECT_NUMBER: "53"
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          LABEL_NAME: ${{ github.event.label.name }}
+
+          ALL_STATUS_LABELS: "status:incoming,status:todo,status:ready,status:in-progress,status:review,status:done"
+        run: |
+          set -euo pipefail
+
+          # Act only on your status labels
+          case "$LABEL_NAME" in
+            status:incoming|status:todo|status:ready|status:in-progress|status:review|status:done) ;;
+            *) echo "Label '$LABEL_NAME' not managed; exit"; exit 0 ;;
+          esac
+
+          # If unlabeled event removed a status label, we do nothing for now (optional: clear Status)
+          if [ "${{ github.event.action }}" = "unlabeled" ]; then
+            echo "Status label removed; not updating project (configurable)."
+            exit 0
+          fi
+
+          # Enforce mutual exclusion on labels in this repo issue (optional but helpful)
+          IFS=',' read -ra labels <<< "$ALL_STATUS_LABELS"
+          for l in "${labels[@]}"; do
+            if [ "$l" != "$LABEL_NAME" ]; then
+              gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "$l" || true
+            fi
+          done
+
+          # Map label -> status option name
+          status=""
+          case "$LABEL_NAME" in
+            status:incoming)     status="Incoming" ;;
+            status:todo)         status="Todo" ;;
+            status:ready)        status="Ready" ;;
+            status:in-progress)  status="In Progress" ;;
+            status:review)       status="Review" ;;
+            status:done)         status="Done" ;;
+          esac
+          echo "Setting project status to '$status'"
+
+          # Find the project item for this issue and update the single-select field "Status".
+          # (Starter approach: query project items for this issue content, then mutate field value.)
+          # You'll likely want to optimize later (pagination, caching field IDs/options).
+          query='
+          query($org:String!, $number:Int!, $repo:String!, $issue:Int!) {
+            organization(login:$org) {
+              projectV2(number:$number) {
+                id
+                fields(first:50) {
+                  nodes {
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      name
+                      options { id name }
+                    }
+                  }
+                }
+                items(first:100) {
+                  nodes {
+                    id
+                    content {
+                      ... on Issue {
+                        number
+                        repository { nameWithOwner }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }'
+          data="$(gh api graphql -f query="$query" -f org="$ORG" -F number="$PROJECT_NUMBER" -f repo="$REPO" -F issue="$ISSUE_NUMBER")"
+
+          project_id="$(echo "$data" | jq -r '.data.organization.projectV2.id')"
+          status_field_id="$(echo "$data" | jq -r '.data.organization.projectV2.fields.nodes[] | select(.name=="Status") | .id' | head -n1)"
+          option_id="$(echo "$data" | jq -r --arg s "$status" '.data.organization.projectV2.fields.nodes[] | select(.name=="Status") | .options[] | select(.name==$s) | .id' | head -n1)"
+          item_id="$(echo "$data" | jq -r --arg r "$REPO" --argjson n "$ISSUE_NUMBER" '
+            .data.organization.projectV2.items.nodes[]
+            | select(.content.repository.nameWithOwner==$r and .content.number==$n)
+            | .id' | head -n1)"
+
+          if [ -z "$item_id" ] || [ "$item_id" = "null" ]; then
+            echo "Issue is not in Project 53; nothing to update."
+            exit 0
+          fi
+
+          if [ -z "$status_field_id" ] || [ -z "$option_id" ] || [ "$status_field_id" = "null" ] || [ "$option_id" = "null" ]; then
+            echo "Could not resolve Status field or option id."
+            exit 1
+          fi
+
+          mutation='
+          mutation($project:ID!, $item:ID!, $field:ID!, $option: String!) {
+            updateProjectV2ItemFieldValue(input: {
+              projectId: $project
+              itemId: $item
+              fieldId: $field
+              value: { singleSelectOptionId: $option }
+            }) {
+              projectV2Item { id }
+            }
+          }'
+
+          gh api graphql -f query="$mutation" -f project="$project_id" -f item="$item_id" -f field="$status_field_id" -f option="$option_id"
