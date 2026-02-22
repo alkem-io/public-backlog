@@ -1,0 +1,162 @@
+name: "Projects fields → issue labels (Status/SubCircle)"
+
+on:
+  project_v2_item:
+    types: [edited]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Sync Status/SubCircle field to issue labels
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+
+          ORG: alkem-io
+          PROJECT_50: "50"
+          PROJECT_53: "53"
+
+          ITEM_NODE_ID: ${{ github.event.projects_v2_item.node_id }}
+
+          # Status mapping
+          ALL_STATUS_LABELS: "status:incoming,status:todo,status:ready,status:in-progress,status:review,status:done"
+
+          # SubCircle mapping
+          ALL_SUBCIRCLE_LABELS: "subcircle:platform-foundation,subcircle:operational-services,subcircle:platform-expansion,subcircle:customer-experience"
+        run: |
+          set -euo pipefail
+
+          echo "Project item node id: $ITEM_NODE_ID"
+
+          # Determine which project triggered this event.
+          # The event payload does not always include the project number directly, so we try both projects:
+          # - If the item exists in project 50, we'll read its field values there.
+          # - Else try project 53.
+          #
+          # This keeps the workflow generic for both boards.
+
+          load_item () {
+            local project_number="$1"
+            local query='
+            query($org:String!, $number:Int!, $item:ID!) {
+              organization(login:$org) {
+                projectV2(number:$number) {
+                  id
+                  item: item(id:$item) {
+                    id
+                    content {
+                      ... on Issue {
+                        number
+                        repository { nameWithOwner }
+                      }
+                    }
+                    fieldValues(first:50) {
+                      nodes {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          name
+                          field { ... on ProjectV2SingleSelectField { name } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }'
+            gh api graphql -f query="$query" -f org="$ORG" -F number="$project_number" -f item="$ITEM_NODE_ID"
+          }
+
+          data=""
+          project=""
+          if data="$(load_item "$PROJECT_50" 2>/dev/null)"; then
+            has_item="$(echo "$data" | jq -r '.data.organization.projectV2.item.id // empty')"
+            if [ -n "$has_item" ]; then
+              project="$PROJECT_50"
+            fi
+          fi
+
+          if [ -z "$project" ]; then
+            data="$(load_item "$PROJECT_53")"
+            has_item="$(echo "$data" | jq -r '.data.organization.projectV2.item.id // empty')"
+            if [ -n "$has_item" ]; then
+              project="$PROJECT_53"
+            fi
+          fi
+
+          if [ -z "$project" ]; then
+            echo "Item not found in project 50 or 53 (or not accessible). Exiting."
+            exit 0
+          fi
+
+          repo="$(echo "$data" | jq -r '.data.organization.projectV2.item.content.repository.nameWithOwner // empty')"
+          number="$(echo "$data" | jq -r '.data.organization.projectV2.item.content.number // empty')"
+
+          if [ -z "$repo" ] || [ -z "$number" ]; then
+            echo "No linked issue found (maybe draft item or PR). Exiting."
+            exit 0
+          fi
+
+          # PoC scope: only act on issues in alkem-io/public-backlog
+          if [ "$repo" != "alkem-io/public-backlog" ]; then
+            echo "Issue is in $repo, but PoC is limited to alkem-io/public-backlog. Exiting."
+            exit 0
+          fi
+
+          status="$(echo "$data" | jq -r '.data.organization.projectV2.item.fieldValues.nodes[]?
+            | select(.field.name=="Status") | .name' | head -n1 || true)"
+
+          subcircle="$(echo "$data" | jq -r '.data.organization.projectV2.item.fieldValues.nodes[]?
+            | select(.field.name=="SubCircle") | .name' | head -n1 || true)"
+
+          echo "Project: $project"
+          echo "Issue: $repo#$number"
+          echo "Status: ${status:-<none>}"
+          echo "SubCircle: ${subcircle:-<none>}"
+
+          # --- Sync Status -> status:* label (if Status is set) ---
+          status_label=""
+          case "${status:-}" in
+            "Incoming")    status_label="status:incoming" ;;
+            "Todo")        status_label="status:todo" ;;
+            "Ready")       status_label="status:ready" ;;
+            "In Progress") status_label="status:in-progress" ;;
+            "Review")      status_label="status:review" ;;
+            "Done")        status_label="status:done" ;;
+            ""|"null")     status_label="" ;;
+            *) echo "Unrecognized Status '${status}' - skipping status label sync"; status_label="" ;;
+          esac
+
+          if [ -n "$status_label" ]; then
+            IFS=',' read -ra labels <<< "$ALL_STATUS_LABELS"
+            for l in "${labels[@]}"; do
+              if [ "$l" != "$status_label" ]; then
+                gh issue edit "$number" --repo "$repo" --remove-label "$l" || true
+              fi
+            done
+            gh issue edit "$number" --repo "$repo" --add-label "$status_label" || true
+          fi
+
+          # --- Sync SubCircle -> subcircle:* label (if SubCircle is set) ---
+          subcircle_label=""
+          case "${subcircle:-}" in
+            "Platform Foundation")  subcircle_label="subcircle:platform-foundation" ;;
+            "Operational Services") subcircle_label="subcircle:operational-services" ;;
+            "Platform Expansion")   subcircle_label="subcircle:platform-expansion" ;;
+            "Customer Experience")  subcircle_label="subcircle:customer-experience" ;;
+            ""|"null")              subcircle_label="" ;;
+            *) echo "Unrecognized SubCircle '${subcircle}' - skipping subcircle label sync"; subcircle_label="" ;;
+          esac
+
+          if [ -n "$subcircle_label" ]; then
+            IFS=',' read -ra labels <<< "$ALL_SUBCIRCLE_LABELS"
+            for l in "${labels[@]}"; do
+              if [ "$l" != "$subcircle_label" ]; then
+                gh issue edit "$number" --repo "$repo" --remove-label "$l" || true
+              fi
+            done
+            gh issue edit "$number" --repo "$repo" --add-label "$subcircle_label" || true
+          fi
